@@ -1,0 +1,163 @@
+package com.barber.app;
+
+/** منطق خالص (بدون وابستگی به اندروید) تا بتوان جداگانه تست کرد. */
+public final class Logic {
+
+    private Logic() {
+    }
+
+    /** فقط ارقام (ارقام فارسی/عربی هم به انگلیسی تبدیل می‌شوند) */
+    public static String digitsOnly(String s) {
+        String n = Fmt.normalizeDigits(s == null ? "" : s);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n.length(); i++) {
+            char c = n.charAt(i);
+            if (c >= '0' && c <= '9') sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** آیا این شماره برای ارسال پیامک قابل قبول است؟ (حداقل ۱۰ رقم) */
+    public static boolean isUsablePhone(String raw) {
+        return digitsOnly(raw).length() >= 10;
+    }
+
+    public static String fillTemplate(String tpl, String name, String date, String time,
+                                      String service, String salon) {
+        return tpl.replace("{name}", name == null ? "" : name)
+                .replace("{date}", date == null ? "" : date)
+                .replace("{time}", time == null ? "" : time)
+                .replace("{service}", service == null ? "" : service)
+                .replace("{salon}", salon == null ? "" : salon);
+    }
+
+    /** آمار مراجعات یک مشتری */
+    public static final class Stats {
+        public int visits;
+        public double spent;
+        /** آخرین مراجعه‌ی گذشته (yyyy-MM-dd) یا null */
+        public String lastVisit;
+        /** اندیس نزدیک‌ترین نوبت آینده در آرایه‌های ورودی، یا -1 */
+        public int nextIndex = -1;
+
+        public double average() {
+            return visits > 0 ? spent / visits : 0;
+        }
+    }
+
+    /**
+     * محاسبه‌ی آمار از لیست نوبت‌های یک مشتری. نوبت‌های امروز و قبل از آن «مراجعه» حساب می‌شوند
+     * و نوبت‌های بعد از امروز «نوبت آینده» هستند.
+     */
+    public static Stats stats(String[] dates, String[] times, double[] prices, String today) {
+        Stats s = new Stats();
+        for (int i = 0; i < dates.length; i++) {
+            String d = dates[i];
+            if (d == null) continue;
+            if (d.compareTo(today) <= 0) {
+                s.visits++;
+                s.spent += prices[i];
+                if (s.lastVisit == null || d.compareTo(s.lastVisit) > 0) s.lastVisit = d;
+            } else if (s.nextIndex < 0) {
+                s.nextIndex = i;
+            } else {
+                int c = d.compareTo(dates[s.nextIndex]);
+                if (c < 0 || (c == 0 && times[i] != null && times[s.nextIndex] != null
+                        && times[i].compareTo(times[s.nextIndex]) < 0)) {
+                    s.nextIndex = i;
+                }
+            }
+        }
+        return s;
+    }
+
+    /** اگر تعداد مراجعات قبلی visits باشد، آیا مراجعه‌ی بعدی جایزه دارد؟ (هر threshold‌امین مراجعه) */
+    public static boolean isRewardVisit(int visits, int threshold) {
+        return threshold > 0 && (visits + 1) % threshold == 0;
+    }
+
+    /** چند مراجعه‌ی دیگر (با احتساب خود مراجعه‌ی جایزه‌دار) تا جایزه‌ی بعدی؛ ۱ یعنی مراجعه‌ی بعدی جایزه دارد */
+    public static int visitsUntilReward(int visits, int threshold) {
+        if (threshold <= 0) return 0;
+        return threshold - (visits % threshold);
+    }
+
+    // ---------------- قفل برنامه ----------------
+
+    public static final int PIN_MIN = 4;
+    public static final int PIN_MAX = 8;
+
+    /**
+     * رمز معتبر: فقط ارقام (فارسی/عربی هم قبول و به انگلیسی تبدیل می‌شود)، ۴ تا ۸ رقم.
+     * هر کاراکتر دیگری (فاصله، حرف، ویرگول…) = نامعتبر (null).
+     */
+    public static String normalizePin(String raw) {
+        if (raw == null) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c >= '0' && c <= '9') sb.append(c);
+            else if (c >= '\u06F0' && c <= '\u06F9') sb.append((char) ('0' + (c - '\u06F0')));
+            else if (c >= '\u0660' && c <= '\u0669') sb.append((char) ('0' + (c - '\u0660')));
+            else return null;
+        }
+        int n = sb.length();
+        return (n >= PIN_MIN && n <= PIN_MAX) ? sb.toString() : null;
+    }
+
+    /** نمک تصادفی ۱۶ بایتی به‌صورت hex */
+    public static String newSalt() {
+        byte[] b = new byte[16];
+        new java.security.SecureRandom().nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format(java.util.Locale.US, "%02x", x));
+        return sb.toString();
+    }
+
+    /** هش رمز: SHA-256 با نمک، ۲۰هزار دور (کند کردن حدس‌زدن) */
+    public static String hashPin(String salt, String pin) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = (salt + ":" + pin).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            for (int i = 0; i < 20000; i++) {
+                md.reset();
+                md.update(d);
+                md.update(salt.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                d = md.digest();
+            }
+            StringBuilder sb = new StringBuilder();
+            for (byte x : d) sb.append(String.format(java.util.Locale.US, "%02x", x));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** مقایسه‌ی رمز واردشده با هش ذخیره‌شده (زمان ثابت) */
+    public static boolean verifyPin(String salt, String pin, String expectedHash) {
+        if (salt == null || pin == null || expectedHash == null) return false;
+        return java.security.MessageDigest.isEqual(
+                hashPin(salt, pin).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expectedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
+     * مدت قفل شدن بعد از failures بار رمز اشتباه پشت‌سرهم (ثانیه):
+     * ۴ بار اول بدون محدودیت، از بار پنجم ۳۰ ثانیه و بعد هر بار دو برابر تا سقف ۱۵ دقیقه.
+     */
+    public static int lockoutSeconds(int failures) {
+        if (failures < 5) return 0;
+        long s = 30L << Math.min(failures - 5, 10);
+        return (int) Math.min(s, 900L);
+    }
+
+    /**
+     * زمان ارسال پیامک یادآوری: leadHours ساعت قبل از نوبت.
+     * اگر به آن زمان رسیده‌ایم (نوبت نزدیک است) به‌زودی ارسال می‌شود؛ اگر نوبت گذشته باشد -1.
+     */
+    public static long smsTriggerTime(long apptMs, long nowMs, int leadHours) {
+        if (apptMs <= nowMs) return -1;
+        long t = apptMs - leadHours * 3600_000L;
+        return Math.max(t, nowMs + 2000L);
+    }
+}
