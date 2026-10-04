@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layoutDirection="rtl"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <EditText
+        android:id="@+id/et_customer_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="نام مشتری"
+        android:inputType="textPersonName"
+        android:textAlignment="viewStart" />
+
+    <EditText
+        android:id="@+id/et_customer_phone"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="شماره تلفن"
+        android:inputType="phone"
+        android:textAlignment="viewStart" />
+</LinearLayout>
