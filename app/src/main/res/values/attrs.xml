@@ -1,7 +1,0 @@
-<resources>
-    <attr name="barberToolbar" format="color" />
-    <attr name="barberOnToolbar" format="color" />
-    <attr name="barberAccent" format="color" />
-    <attr name="barberSurface" format="color" />
-    <attr name="barberCardStroke" format="color" />
-</resources>
