@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layoutDirection="rtl">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <EditText
+            android:id="@+id/et_vis_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="نام ویزیتور *"
+            android:inputType="textPersonName"
+            android:textAlignment="viewStart" />
+
+        <EditText
+            android:id="@+id/et_vis_mobile"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="موبایل"
+            android:inputType="phone"
+            android:textAlignment="viewStart" />
+
+        <EditText
+            android:id="@+id/et_vis_percent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="درصد پورسانت (مثلاً 10 یا 12.5) *"
+            android:inputType="numberDecimal"
+            android:textAlignment="viewStart" />
+
+        <CheckBox
+            android:id="@+id/cb_vis_active"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:checked="true"
+            android:text="فعال (در فهرست انتخاب ویزیتور نمایش داده شود)" />
+
+        <EditText
+            android:id="@+id/et_vis_notes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="top|start"
+            android:hint="یادداشت (شماره کارت/شبا و …)"
+            android:inputType="textMultiLine"
+            android:minLines="2"
+            android:textAlignment="viewStart" />
+    </LinearLayout>
+</ScrollView>
