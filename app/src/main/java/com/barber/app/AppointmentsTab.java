@@ -1,0 +1,873 @@
+package com.barber.app;
+
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.ListView;
+import android.widget.Spinner;
+import android.widget.TextView;
+
+import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** تب نوبت‌ها: نمایش نوبت‌های یک روز، جستجو، افزودن، ویرایش و حذف. */
+public class AppointmentsTab implements Refreshable {
+
+    private final MainActivity act;
+    private final TextView tvDate;
+    private final TextView tvIncome;
+    private final EditText etSearch;
+    private final RowAdapter adapter;
+    private final Button btnWeek;
+    private final GridMode.Host grid;
+    private boolean weekMode = false;
+    /** آیتم‌های لیست فعلی: Db.Appointment یا int[] (تاریخ شمسیِ سرتیتر روز در نمای هفتگی) */
+    private List<Object> items = new ArrayList<>();
+
+    public AppointmentsTab(MainActivity activity, View root) {
+        this.act = activity;
+        tvDate = root.findViewById(R.id.tv_date);
+        tvIncome = root.findViewById(R.id.tv_income);
+        tvIncome.setBackground(Ui.tinted(act, Ui.themeColor(act, R.attr.barberAccent, 0xFF1E6BE6), 0x1F, 10));
+        tvIncome.setPadding(Ui.dp(act, 10), Ui.dp(act, 6), Ui.dp(act, 10), Ui.dp(act, 6));
+        etSearch = root.findViewById(R.id.et_search);
+        btnWeek = root.findViewById(R.id.btn_week);
+        btnWeek.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                weekMode = !weekMode;
+                refresh();
+            }
+        });
+        ListView list = root.findViewById(R.id.list_appointments);
+        TextView empty = root.findViewById(R.id.empty_appointments);
+        adapter = new RowAdapter(act);
+        list.setAdapter(adapter);
+        list.setEmptyView(empty);
+        grid = new GridMode.Host(act, list);
+
+        root.findViewById(R.id.btn_prev_day).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                shiftDay(-1);
+            }
+        });
+        root.findViewById(R.id.btn_next_day).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                shiftDay(1);
+            }
+        });
+        root.findViewById(R.id.btn_today).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                act.selectedDate = JalaliCalendar.today();
+                refresh();
+            }
+        });
+        tvDate.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                JalaliPicker.show(act, act.selectedDate, new JalaliPicker.OnPicked() {
+                    @Override
+                    public void onPicked(int year, int month, int day) {
+                        act.selectedDate = new int[]{year, month, day};
+                        refresh();
+                    }
+                });
+            }
+        });
+        root.findViewById(R.id.fab_add_appointment).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showDialog(null);
+            }
+        });
+        etSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                refresh();
+            }
+        });
+        list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= items.size()) return;
+                Object o = items.get(position);
+                if (o instanceof Db.Appointment) {
+                    showActions((Db.Appointment) o);
+                } else if (o instanceof int[]) {
+                    act.selectedDate = (int[]) o; // لمس سرتیتر روز → نمای همان روز
+                    weekMode = false;
+                    refresh();
+                }
+            }
+        });
+    }
+
+    private void shiftDay(int delta) {
+        int[] d = act.selectedDate;
+        act.selectedDate = JalaliCalendar.addDays(d[0], d[1], d[2], weekMode ? delta * 7 : delta);
+        refresh();
+    }
+
+    private String isoSelected() {
+        int[] d = act.selectedDate;
+        return JalaliCalendar.jalaliToGregorianString(d[0], d[1], d[2]);
+    }
+
+    private static String describe(Db.Appointment a) {
+        return a.service + "  •  تا " + a.endTime()
+                + (a.smsReminder ? (a.smsSent ? "   📩✓" : "   📩") : "")
+                + (a.done ? "   ✅ انجام شد" : "   ⏳ در انتظار")
+                + (a.debt() > 0 ? "   ⚠️ بدهی " + Fmt.price(a.debt()) : "");
+    }
+
+    @Override
+    public void refresh() {
+        btnWeek.setText(weekMode ? "روز" : "هفته");
+        if (weekMode) {
+            refreshWeek();
+        } else {
+            refreshDay();
+        }
+    }
+
+    private void refreshDay() {
+        int[] d = act.selectedDate;
+        String dayName = JalaliCalendar.DAY_NAMES[JalaliCalendar.dayOfWeek(d[0], d[1], d[2])];
+        tvDate.setText(dayName + "  " + JalaliCalendar.format(d[0], d[1], d[2]));
+
+        String iso = isoSelected();
+        Db db = Db.get(act);
+        List<Db.Appointment> data = db.getAppointments(iso, etSearch.getText().toString());
+        items = new ArrayList<>();
+        List<RowAdapter.Row> rows = new ArrayList<>();
+        for (Db.Appointment a : data) {
+            items.add(a);
+            rows.add(new RowAdapter.Row(a.id, a.time, a.customerName, describe(a),
+                    Fmt.price(a.done ? a.earned() : a.price)));
+        }
+        adapter.setRows(rows);
+        renderGrid(false, rows, db.incomeForDate(iso));
+        double pending = db.pendingForDate(iso);
+        tvIncome.setText("✅ " + Fmt.money(db.incomeForDate(iso))
+                + (pending > 0 ? "   •   ⏳ " + Fmt.price(pending) : ""));
+    }
+
+    /** عنوان کوتاه هفته، مثلاً «10 مهر – 16 مهر 1405» */
+    static String weekTitle(int[] s, int[] e) {
+        String a = s[2] + " " + JalaliCalendar.MONTH_NAMES[s[1] - 1];
+        String b = e[2] + " " + JalaliCalendar.MONTH_NAMES[e[1] - 1];
+        if (s[0] == e[0]) return a + " – " + b + " " + e[0];
+        return a + " " + s[0] + " – " + b + " " + e[0];
+    }
+
+    /** نمای هفتگی: هفته از شنبه تا جمعه؛ برای هر روز یک سرتیتر و زیرش نوبت‌های همان روز */
+    private void refreshWeek() {
+        int[] d = act.selectedDate;
+        int dow = JalaliCalendar.dayOfWeek(d[0], d[1], d[2]);
+        int[] start = JalaliCalendar.addDays(d[0], d[1], d[2], -dow);
+        int[] end = JalaliCalendar.addDays(start[0], start[1], start[2], 6);
+        tvDate.setText(weekTitle(start, end));
+
+        Db db = Db.get(act);
+        String q = etSearch.getText().toString().trim().toLowerCase();
+        List<Db.Appointment> all = db.getAppointmentsBetween(
+                JalaliCalendar.jalaliToGregorianString(start[0], start[1], start[2]),
+                JalaliCalendar.jalaliToGregorianString(end[0], end[1], end[2]));
+
+        items = new ArrayList<>();
+        List<RowAdapter.Row> rows = new ArrayList<>();
+        double weekTotal = 0;
+        for (int i = 0; i < 7; i++) {
+            int[] day = JalaliCalendar.addDays(start[0], start[1], start[2], i);
+            String iso = JalaliCalendar.jalaliToGregorianString(day[0], day[1], day[2]);
+            List<Db.Appointment> dayList = new ArrayList<>();
+            double income = 0;
+            int count = 0;
+            for (Db.Appointment a : all) {
+                if (!iso.equals(a.date)) continue;
+                income += a.earned();
+                count++;
+                if (q.isEmpty() || (a.customerName != null && a.customerName.toLowerCase().contains(q))) {
+                    dayList.add(a);
+                }
+            }
+            weekTotal += income;
+            items.add(day);
+            rows.add(new RowAdapter.Row(-1, "", JalaliCalendar.DAY_NAMES[i] + "  " + day[2] + " "
+                    + JalaliCalendar.MONTH_NAMES[day[1] - 1],
+                    count == 0 ? "بدون نوبت" : count + " نوبت",
+                    income > 0 ? Fmt.price(income) : "", false, true));
+            for (Db.Appointment a : dayList) {
+                items.add(a);
+                rows.add(new RowAdapter.Row(a.id, a.time, a.customerName, describe(a),
+                        Fmt.price(a.done ? a.earned() : a.price)));
+            }
+        }
+        adapter.setRows(rows);
+        renderGrid(true, rows, weekTotal);
+        tvIncome.setText("✅ درآمد هفته: " + Fmt.money(weekTotal));
+    }
+
+    /** نمای جدولی؛ ردیف‌ها یک‌به‌یک با items هستند (لمس ردیف = لمس همان آیتم) */
+    private void renderGrid(boolean week, List<RowAdapter.Row> rows, double total) {
+        List<Object[]> t = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            Object o = items.get(i);
+            RowAdapter.Row r = rows.get(i);
+            if (o instanceof Db.Appointment) {
+                Db.Appointment a = (Db.Appointment) o;
+                String status = (a.done ? "✅" : "⏳") + (a.debt() > 0 ? " بدهی " + Fmt.price(a.debt()) : "");
+                t.add(new Object[]{a.time + "–" + a.endTime(), a.customerName, a.service,
+                        a.done ? a.earned() : a.price, status});
+            } else {
+                t.add(new Object[]{"📅 " + r.title, r.subtitle, "", r.trail, ""});
+            }
+        }
+        grid.render(new String[]{"ساعت", "مشتری", "خدمت", "مبلغ", "وضعیت"}, t,
+                new Object[]{week ? "جمع هفته" : "جمع روز", "", "", total, ""},
+                new TableUi.OnRow() {
+                    @Override
+                    public void onRow(int i) {
+                        if (i < 0 || i >= items.size()) return;
+                        Object o = items.get(i);
+                        if (o instanceof Db.Appointment) {
+                            showActions((Db.Appointment) o);
+                        } else if (o instanceof int[]) {
+                            act.selectedDate = (int[]) o;
+                            weekMode = false;
+                            refresh();
+                        }
+                    }
+                }, !week);
+    }
+
+    private void showActions(final Db.Appointment a) {
+        final List<String> labels = new ArrayList<>();
+        final List<Integer> codes = new ArrayList<>();
+        if (!a.done) {
+            labels.add("✅ انجام شد – دریافت مبلغ");
+            codes.add(0);
+        } else {
+            labels.add("↩️ برگرداندن به «در انتظار» (از درآمد کم می‌شود)");
+            codes.add(1);
+        }
+        if (a.debt() > 0) {
+            labels.add("💵 ثبت پرداخت بدهی (مانده " + Fmt.price(a.debt()) + ")");
+            codes.add(6);
+        }
+        labels.add("✏️ ویرایش");
+        codes.add(2);
+        labels.add("📩 ارسال پیامک یادآوری همین حالا");
+        codes.add(3);
+        labels.add("👤 پروفایل مشتری");
+        codes.add(4);
+        labels.add("🗑 حذف");
+        codes.add(5);
+        new MaterialAlertDialogBuilder(act)
+                .setTitle(a.customerName + " - " + a.time)
+                .setItems(labels.toArray(new CharSequence[0]),
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface dialog, int which) {
+                                switch (codes.get(which)) {
+                                    case 0:
+                                        showDone(a);
+                                        break;
+                                    case 1:
+                                        if (!act.canWrite()) break;
+                                        Db.get(act).markPending(a.id);
+                                        act.refreshAll();
+                                        Ui.toast(act, "نوبت به «در انتظار» برگشت و از درآمد کم شد");
+                                        break;
+                                    case 2:
+                                        showDialog(a);
+                                        break;
+                                    case 3:
+                                        sendNow(a);
+                                        break;
+                                    case 4:
+                                        CustomerProfile.show(act, a.customerId);
+                                        break;
+                                    case 6:
+                                        payAppointmentDebt(a);
+                                        break;
+                                    default:
+                                        confirmDelete(a);
+                                }
+                            }
+                        })
+                .show();
+    }
+
+    /** ثبت پرداخت (کامل یا بخشی) برای بدهی یک نوبت */
+    private void payAppointmentDebt(final Db.Appointment a) {
+        if (!act.canWrite()) return;
+        PayUi.showDebtPayment(act, "پرداخت بدهی – " + a.customerName, a.debt(), new PayUi.OnPay() {
+            @Override
+            public void onPay(double amount, String method) {
+                Db.get(act).payAppointment(a.id, amount, method);
+                act.refreshAll();
+                Ui.toast(act, "پرداخت " + Fmt.money(amount) + " (" + Pay.label(method) + ") ثبت شد");
+            }
+        });
+    }
+
+    /** ثبت «انجام شد»: مبلغی که واقعاً از مشتری گرفته شد (پیش‌فرض: مبلغ توافقی) در درآمد حساب می‌شود. */
+    private void showDone(final Db.Appointment a) {
+        if (!act.canWrite()) return;
+        android.widget.LinearLayout box = new android.widget.LinearLayout(act);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        box.setPadding(Ui.dp(act, 20), Ui.dp(act, 12), Ui.dp(act, 20), Ui.dp(act, 4));
+
+        TextView info = new TextView(act);
+        info.setText(a.customerName + "  •  " + a.service + "\nمبلغ توافقی: " + Fmt.money(a.price));
+        info.setPadding(0, 0, 0, Ui.dp(act, 10));
+        box.addView(info);
+
+        final EditText et = new EditText(act);
+        et.setHint("مبلغ دریافتی (" + AppConfig.CURRENCY + ")");
+        et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        et.setMaxLines(1);
+        et.setText(Fmt.plain(a.price));
+        et.selectAll();
+        box.addView(et);
+
+        final PayUi.Section pay = PayUi.build(act, new java.util.concurrent.Callable<Double>() {
+            @Override
+            public Double call() {
+                Double t = Fmt.parsePrice(et.getText().toString());
+                return t == null ? 0.0 : t;
+            }
+        });
+        box.addView(pay.view);
+        et.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s1, int st, int c, int a1) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s1, int st, int b1, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s1) {
+                Double t = Fmt.parsePrice(s1.toString());
+                pay.updateHint(t == null ? 0 : t);
+            }
+        });
+
+        final androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(act)
+                .setTitle("✅ انجام شد")
+                .setView(Ui.scroll(box))
+                .setPositiveButton("ثبت و حساب در درآمد", null)
+                .setNegativeButton("انصراف", null)
+                .create();
+        dialog.show();
+        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        Double amount = Fmt.parsePrice(et.getText().toString());
+                        if (amount == null) {
+                            et.setError("مبلغ صحیح نیست");
+                            return;
+                        }
+                        Double paid = pay.paid(amount);
+                        if (paid == null) return;
+                        Db.get(act).markDone(a.id, amount, pay.method(), paid);
+                        dialog.dismiss();
+                        act.refreshAll();
+                        Ui.toast(act, amount - paid > 0.5
+                                ? "ثبت شد؛ " + Fmt.money(amount - paid) + " بدهی مشتری ماند"
+                                : "ثبت شد؛ " + Fmt.money(amount) + " به درآمد اضافه شد");
+                    }
+                });
+    }
+
+    /** ارسال دستی: متن آماده در برنامه‌ی پیامک باز می‌شود و خود کاربر ارسال را تأیید می‌کند. */
+    private void sendNow(Db.Appointment a) {
+        int[] j = JalaliCalendar.jalaliOfIso(a.date);
+        String date = JalaliCalendar.DAY_NAMES[JalaliCalendar.dayOfWeek(j[0], j[1], j[2])] + " "
+                + JalaliCalendar.format(j[0], j[1], j[2]);
+        String text = Logic.fillTemplate(AppConfig.getSmsTemplate(act), a.customerName, date, a.time,
+                a.service, AppConfig.getSalonName(act));
+        Messenger.openSms(act, a.phone, text);
+    }
+
+    private void confirmDelete(final Db.Appointment a) {
+        if (!act.canWrite()) return;
+        new MaterialAlertDialogBuilder(act)
+                .setTitle("حذف نوبت")
+                .setMessage("آیا از حذف نوبت " + a.customerName + " ساعت " + a.time + " مطمئن هستید؟")
+                .setPositiveButton("حذف", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        Db.get(act).deleteAppointment(a.id);
+                        ReminderScheduler.cancel(act, a.id);
+                        refresh();
+                        Ui.toast(act, "نوبت حذف شد");
+                    }
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
+
+    private static List<String> pickedNames(List<String> all, boolean[] sel) {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < all.size() && i < sel.length; i++) {
+            if (sel[i]) out.add(all.get(i));
+        }
+        return out;
+    }
+
+    private int sumDurations(List<String> names) {
+        int sum = 0;
+        for (String n : names) sum += AppConfig.getDuration(act, n);
+        return sum <= 0 ? 30 : sum;
+    }
+
+    private static int intOf(EditText et, int def) {
+        Double v = Fmt.parsePrice(et.getText().toString());
+        return v == null ? def : (int) Math.round(v);
+    }
+
+    private double sumDefaults(List<String> names) {
+        double sum = 0;
+        for (String n : names) sum += AppConfig.getPrice(act, n);
+        return sum;
+    }
+
+    /** پنجره افزودن (existing == null) یا ویرایش نوبت */
+    private void showDialog(final Db.Appointment existing) {
+        if (!act.canWrite()) return;
+        // روزی که پنجره روی آن کار می‌کند: برای ویرایش، روز خودِ نوبت (در نمای هفتگی ممکن است با روز انتخاب‌شده فرق کند)
+        final String dialogIso = existing != null ? existing.date : isoSelected();
+        final int[] sd = existing != null ? JalaliCalendar.jalaliOfIso(existing.date) : act.selectedDate;
+        final Db db = Db.get(act);
+        final List<Db.Customer> customers = db.getCustomers();
+        if (customers.isEmpty()) {
+            Ui.toastLong(act, "ابتدا از تب «مشتریان» یک مشتری اضافه کنید");
+            return;
+        }
+
+        View v = LayoutInflater.from(act).inflate(R.layout.dialog_appointment, null);
+        final Spinner spCustomer = v.findViewById(R.id.sp_customer);
+        final Button btnTime = v.findViewById(R.id.btn_time);
+        final EditText etDuration = v.findViewById(R.id.et_duration);
+        final TextView tvTimeHint = v.findViewById(R.id.tv_time_hint);
+        final Button btnServices = v.findViewById(R.id.btn_services);
+        final TextView tvServicesSum = v.findViewById(R.id.tv_services_sum);
+        final EditText etPrice = v.findViewById(R.id.et_price);
+        final CheckBox cbSms = v.findViewById(R.id.cb_sms);
+        final CheckBox cbDone = v.findViewById(R.id.cb_done);
+        cbDone.setChecked(existing != null && existing.done);
+        final TextView tvSmsHint = v.findViewById(R.id.tv_sms_hint);
+        final TextView tvLoyalty = v.findViewById(R.id.tv_loyalty);
+        final TextView tvDebt = v.findViewById(R.id.tv_debt);
+        final android.widget.LinearLayout llPay = v.findViewById(R.id.ll_pay);
+        // بخش پرداخت فقط وقتی لازم است که نوبت تازه «انجام‌شده» می‌شود؛
+        // نوبتی که پرداختش قبلاً ثبت شده (یا قدیمی است) از «ثبت پرداخت» و پروفایل مشتری اصلاح می‌شود
+        final boolean paySectionAllowed = existing == null || !existing.done;
+        final PayUi.Section paySec = PayUi.build(act, new java.util.concurrent.Callable<Double>() {
+            @Override
+            public Double call() {
+                Double t = Fmt.parsePrice(etPrice.getText().toString());
+                return t == null ? 0.0 : t;
+            }
+        });
+        llPay.addView(paySec.view);
+        final Runnable updatePayVisibility = new Runnable() {
+            @Override
+            public void run() {
+                llPay.setVisibility(paySectionAllowed && cbDone.isChecked() ? View.VISIBLE : View.GONE);
+                paySec.updateHint(Fmt.parsePrice(etPrice.getText().toString()) == null ? 0
+                        : Fmt.parsePrice(etPrice.getText().toString()));
+            }
+        };
+        cbDone.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                updatePayVisibility.run();
+            }
+        });
+        etPrice.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s1, int st, int c, int a1) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s1, int st, int b1, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s1) {
+                if (llPay.getVisibility() == View.VISIBLE) updatePayVisibility.run();
+            }
+        });
+        final java.util.Map<Long, Double> debts = db.allDebts();
+
+        List<String> names = new ArrayList<>();
+        int customerPos = 0;
+        for (int i = 0; i < customers.size(); i++) {
+            names.add(customers.get(i).name);
+            if (existing != null && customers.get(i).id == existing.customerId) customerPos = i;
+        }
+        spCustomer.setAdapter(Ui.spinnerAdapter(act, names));
+        spCustomer.setSelection(customerPos);
+
+        // ---- پیامک یادآوری به مشتری (انتخابی؛ اگر تیک نخورد هیچ پیامکی ارسال نمی‌شود) ----
+        cbSms.setText("📩 ارسال پیامک یادآوری به مشتری (" + AppConfig.getSmsLeadHours(act)
+                + " ساعت قبل از نوبت)");
+        cbSms.setChecked(existing != null ? existing.smsReminder : AppConfig.getSmsDefault(act));
+        final Runnable updateSmsHint = new Runnable() {
+            @Override
+            public void run() {
+                if (!cbSms.isChecked()) {
+                    tvSmsHint.setText("پیامکی برای این نوبت ارسال نمی‌شود.");
+                    return;
+                }
+                Db.Customer c = customers.get(spCustomer.getSelectedItemPosition());
+                if (Logic.isUsablePhone(c.phone)) {
+                    tvSmsHint.setText("پیامک به شماره‌ی " + Logic.digitsOnly(c.phone) + " ارسال می‌شود.");
+                } else {
+                    tvSmsHint.setText("⚠️ برای این مشتری شماره‌ی معتبری ثبت نشده است؛ ابتدا شماره را در تب مشتریان وارد کنید.");
+                }
+            }
+        };
+        cbSms.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(final android.widget.CompoundButton b, boolean checked) {
+                if (checked && !act.hasSmsPermission()) {
+                    act.requestSmsPermission(new MainActivity.PermCallback() {
+                        @Override
+                        public void onResult(boolean granted) {
+                            if (!granted) {
+                                b.setChecked(false);
+                                Ui.toastLong(act, "بدون مجوز پیامک، ارسال خودکار ممکن نیست");
+                            }
+                        }
+                    });
+                }
+                updateSmsHint.run();
+            }
+        });
+        // یادآوری باشگاه مشتریان: فقط برای نوبت جدید، وقتی مراجعه‌ی بعدی مشتری جایزه دارد
+        final Runnable updateLoyalty = new Runnable() {
+            @Override
+            public void run() {
+                int threshold = AppConfig.getLoyaltyThreshold(act);
+                if (existing != null || threshold <= 0) {
+                    tvLoyalty.setVisibility(View.GONE);
+                    return;
+                }
+                Db.Customer c = customers.get(spCustomer.getSelectedItemPosition());
+                int visits = db.visitCount(c.id, JalaliCalendar.todayGregorianString());
+                if (Logic.isRewardVisit(visits, threshold)) {
+                    tvLoyalty.setText("🎁 این مراجعه‌ی " + (visits + 1) + "ام مشتری است و جایزه‌دار است");
+                    tvLoyalty.setVisibility(View.VISIBLE);
+                } else {
+                    tvLoyalty.setVisibility(View.GONE);
+                }
+            }
+        };
+        // هشدار بدهی مشتری هنگام رزرو
+        final Runnable updateDebt = new Runnable() {
+            @Override
+            public void run() {
+                Db.Customer c = customers.get(spCustomer.getSelectedItemPosition());
+                Double d = debts.get(c.id);
+                if (d != null && d > 0.5) {
+                    tvDebt.setText("⚠️ این مشتری " + Fmt.money(d) + " بدهی دارد");
+                    tvDebt.setVisibility(View.VISIBLE);
+                } else {
+                    tvDebt.setVisibility(View.GONE);
+                }
+            }
+        };
+        spCustomer.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateSmsHint.run();
+                updateLoyalty.run();
+                updateDebt.run();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        updateSmsHint.run();
+
+        final Runnable[] onDurationChanged = {null};
+
+        // ---- خدمت‌ها: یک یا چند مورد؛ مبلغ کل = جمع قیمت خدمت‌ها (قابل ویرایش) ----
+        final List<String> serviceList = new ArrayList<>();
+        serviceList.addAll(AppConfig.getServices(act));
+        List<String> initial = new ArrayList<>();
+        if (existing != null) initial.addAll(Logic.splitServices(existing.service));
+        if (initial.isEmpty() && !serviceList.isEmpty()) initial.add(serviceList.get(0));
+        for (String n : initial) {
+            if (!serviceList.contains(n)) serviceList.add(n); // خدمت قدیمی که در لیست نیست
+        }
+        final boolean[] selected = new boolean[serviceList.size()];
+        for (String n : initial) selected[serviceList.indexOf(n)] = true;
+
+        final Runnable refreshServices = new Runnable() {
+            @Override
+            public void run() {
+                List<String> names = pickedNames(serviceList, selected);
+                btnServices.setText(names.isEmpty() ? "انتخاب خدمت‌ها" : Logic.joinServices(names));
+                StringBuilder sb = new StringBuilder();
+                for (String n : names) {
+                    if (sb.length() > 0) sb.append("  +  ");
+                    sb.append(n).append(" ").append(Fmt.price(AppConfig.getPrice(act, n)));
+                }
+                if (names.size() > 1) sb.append("  =  ").append(Fmt.price(sumDefaults(names)));
+                tvServicesSum.setText(sb.toString());
+            }
+        };
+        refreshServices.run();
+
+        if (existing != null) {
+            etPrice.setText(Fmt.plain(existing.done ? existing.earned() : existing.price));
+            etDuration.setText(String.valueOf(existing.duration));
+        } else {
+            List<String> firstPick = pickedNames(serviceList, selected);
+            etPrice.setText(Fmt.plain(sumDefaults(firstPick)));
+            etDuration.setText(String.valueOf(sumDurations(firstPick)));
+        }
+
+        btnServices.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                CharSequence[] labels = new CharSequence[serviceList.size()];
+                for (int i = 0; i < labels.length; i++) {
+                    labels[i] = serviceList.get(i) + "   —   " + Fmt.price(AppConfig.getPrice(act, serviceList.get(i)));
+                }
+                final boolean[] working = selected.clone();
+                new MaterialAlertDialogBuilder(act)
+                        .setTitle("انتخاب خدمت‌ها")
+                        .setMultiChoiceItems(labels, working, new android.content.DialogInterface.OnMultiChoiceClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int which, boolean checked) {
+                                working[which] = checked;
+                            }
+                        })
+                        .setPositiveButton("تأیید", new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int w) {
+                                List<String> names = pickedNames(serviceList, working);
+                                if (names.isEmpty()) {
+                                    Ui.toastLong(act, "حداقل یک خدمت باید انتخاب شود؛ تغییری اعمال نشد");
+                                    return;
+                                }
+                                System.arraycopy(working, 0, selected, 0, selected.length);
+                                etPrice.setText(Fmt.plain(sumDefaults(names)));
+                                etDuration.setText(String.valueOf(sumDurations(names)));
+                                refreshServices.run();
+                                if (onDurationChanged[0] != null) onDurationChanged[0].run();
+                            }
+                        })
+                        .setNegativeButton("انصراف", null)
+                        .show();
+            }
+        });
+
+        // ---- ساعت شروع: ساعتی / نیم‌ساعتی / آزاد (هر دقیقه) + تشخیص تداخل با نوبت‌های دیگر ----
+        final int mode = AppConfig.getTimeMode(act);
+        final int workStart = AppConfig.getWorkStartHour(act) * 60;
+        final int workEnd = AppConfig.getWorkEndHour(act) * 60;
+        final long exceptId = existing == null ? -1 : existing.id;
+        final List<Db.Appointment> others = new ArrayList<>();
+        for (Db.Appointment x : db.getAppointments(dialogIso, null)) {
+            if (x.id != exceptId) others.add(x);
+        }
+        final int[] busyStart = new int[others.size()];
+        final int[] busyDur = new int[others.size()];
+        for (int i = 0; i < others.size(); i++) {
+            busyStart[i] = Logic.toMinutes(others.get(i).time);
+            busyDur[i] = others.get(i).duration;
+        }
+
+        final int[] startMin = {-1};
+        if (existing != null) startMin[0] = Logic.toMinutes(existing.time);
+        if (startMin[0] < 0) {
+            int free = Logic.firstFreeStart(workStart, workEnd, Math.max(5, intOf(etDuration, 30)),
+                    mode, busyStart, busyDur);
+            startMin[0] = free >= 0 ? free : workStart;
+        }
+        final int[] hintTarget = {-1};
+
+        final Runnable updateTimeHint = new Runnable() {
+            @Override
+            public void run() {
+                int dur = Math.max(5, intOf(etDuration, 30));
+                int s0 = startMin[0];
+                btnTime.setText(Logic.fromMinutes(s0) + "  (تا " + Logic.fromMinutes(s0 + dur) + ")");
+                int ci = Logic.conflictIndex(s0, dur, busyStart, busyDur);
+                int free = Logic.firstFreeStart(workStart, workEnd, dur, mode, busyStart, busyDur);
+                if (ci >= 0) {
+                    Db.Appointment c = others.get(ci);
+                    String base = "⚠️ با نوبت «" + c.customerName + "» (" + c.time + " تا " + c.endTime() + ") تداخل دارد";
+                    if (free >= 0) {
+                        tvTimeHint.setText(base + " — پیشنهاد: " + Logic.fromMinutes(free) + " (لمس کنید)");
+                        hintTarget[0] = free;
+                    } else {
+                        tvTimeHint.setText(base + " — در ساعت کاری جای خالی نمانده");
+                        hintTarget[0] = -1;
+                    }
+                } else {
+                    tvTimeHint.setText("✅ این بازه آزاد است");
+                    hintTarget[0] = -1;
+                }
+            }
+        };
+        onDurationChanged[0] = updateTimeHint;
+        etDuration.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s1, int st, int c, int a1) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s1, int st, int b1, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s1) {
+                updateTimeHint.run();
+            }
+        });
+        tvTimeHint.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (hintTarget[0] >= 0) {
+                    startMin[0] = hintTarget[0];
+                    updateTimeHint.run();
+                }
+            }
+        });
+        btnTime.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                TimeChooser.show(act, startMin[0], mode, new TimeChooser.OnPicked() {
+                    @Override
+                    public void onPicked(int minutes) {
+                        startMin[0] = minutes;
+                        updateTimeHint.run();
+                    }
+                });
+            }
+        });
+        updateTimeHint.run();
+
+        final AlertDialog dialog = new MaterialAlertDialogBuilder(act)
+                .setTitle((existing == null ? "نوبت جدید" : "ویرایش نوبت") + " – "
+                        + JalaliCalendar.DAY_NAMES[JalaliCalendar.dayOfWeek(sd[0], sd[1], sd[2])] + " "
+                        + JalaliCalendar.format(sd[0], sd[1], sd[2]))
+                .setView(Ui.scroll(v))
+                .setPositiveButton("ذخیره", null)
+                .setNegativeButton("انصراف", null)
+                .create();
+        dialog.show();
+
+        Button ok = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        ok.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                Double price = Fmt.parsePrice(etPrice.getText().toString());
+                if (price == null) {
+                    etPrice.setError("قیمت صحیح نیست");
+                    return;
+                }
+                Db.Customer customer = customers.get(spCustomer.getSelectedItemPosition());
+                String time = Logic.fromMinutes(startMin[0]);
+                int duration = intOf(etDuration, 30);
+                if (duration < 5) {
+                    etDuration.setError("مدت باید حداقل ۵ دقیقه باشد");
+                    return;
+                }
+                List<String> pickedList = pickedNames(serviceList, selected);
+                if (pickedList.isEmpty()) {
+                    Ui.toastLong(act, "حداقل یک خدمت انتخاب کنید");
+                    return;
+                }
+                String service = Logic.joinServices(pickedList);
+                String iso = dialogIso;
+
+                final boolean sms = cbSms.isChecked();
+                if (sms && !Logic.isUsablePhone(customer.phone)) {
+                    Ui.toastLong(act, "برای این مشتری شماره‌ی معتبری ثبت نشده؛ شماره را وارد کنید یا تیک پیامک را بردارید");
+                    return;
+                }
+                if (sms && !act.hasSmsPermission()) {
+                    Ui.toastLong(act, "مجوز ارسال پیامک داده نشده است؛ تیک پیامک را بردارید یا مجوز را بدهید");
+                    return;
+                }
+
+                Db.Appointment cf = db.findConflict(iso, time, duration, existing == null ? -1 : existing.id);
+                if (cf != null) {
+                    Ui.toastLong(act, "این زمان با نوبت «" + cf.customerName + "» (" + cf.time + " تا "
+                            + cf.endTime() + ") تداخل دارد");
+                    return;
+                }
+
+                long apptId;
+                if (existing == null) {
+                    double paidNow = price;
+                    if (cbDone.isChecked()) {
+                        Double pp = paySec.paid(price);
+                        if (pp == null) return;
+                        paidNow = pp;
+                    }
+                    apptId = db.addAppointment(customer.id, iso, time, service, price, sms, duration,
+                            cbDone.isChecked(), paySec.method(), paidNow);
+                    if (apptId < 0) {
+                        Ui.toastLong(act, "این زمان (" + time + ") قبلاً رزرو شده است!");
+                        return;
+                    }
+                } else {
+                    double paidNow = price;
+                    if (paySectionAllowed && cbDone.isChecked()) {
+                        Double pp = paySec.paid(price);
+                        if (pp == null) return;
+                        paidNow = pp;
+                    }
+                    if (!db.updateAppointment(existing.id, customer.id, iso, time, service, price, sms, duration,
+                            cbDone.isChecked(), paySec.method(), paidNow)) {
+                        Ui.toastLong(act, "این زمان (" + time + ") قبلاً رزرو شده است!");
+                        return;
+                    }
+                    apptId = existing.id;
+                }
+                ReminderScheduler.schedule(act, apptId, customer.name, iso, time);
+                ReminderScheduler.scheduleSms(act, db.getAppointmentById(apptId));
+                AppConfig.setSmsDefault(act, sms);
+                dialog.dismiss();
+                refresh();
+                Ui.toast(act, existing == null
+                        ? "نوبت برای " + customer.name + " ساعت " + time + " ثبت شد"
+                        : "نوبت ویرایش شد");
+            }
+        });
+    }
+}
