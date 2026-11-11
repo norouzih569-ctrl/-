@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.barber.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.barber.app"
+        minSdk 26
+        targetSdk 34
+        versionCode 41
+        versionName "4.2"
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // دو نسخه از یک سورس: direct = فروش مستقیم با کد لایسنس، bazaar = پرداخت درون‌برنامه‌ای کافه‌بازار
+    flavorDimensions 'store'
+    productFlavors {
+        direct {
+            dimension 'store'
+            buildConfigField 'boolean', 'BAZAAR', 'false'
+        }
+        bazaar {
+            dimension 'store'
+            versionCode 44   // بازار فقط نسخه‌ای با versionCode بالاتر از نسخه‌ی قبلیِ بارگذاری‌شده را می‌پذیرد
+            buildConfigField 'boolean', 'BAZAAR', 'true'
+        }
+    }
+
+    signingConfigs {
+        fixed {
+            storeFile file('barber-debug.keystore')
+            storePassword 'android'
+            keyAlias 'barber'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
+        release {
+            signingConfig signingConfigs.fixed
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+
+    // پولکی (پرداخت درون‌برنامه‌ای بازار) فقط در نسخه‌ی بازار
+    bazaarImplementation 'com.github.cafebazaar.Poolakey:poolakey:2.3.0'
+}
