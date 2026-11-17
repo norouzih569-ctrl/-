@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_appointments"
+        android:icon="@drawable/ic_event"
+        android:title="نوبت‌ها" />
+    <item
+        android:id="@+id/nav_customers"
+        android:icon="@drawable/ic_people"
+        android:title="مشتریان" />
+    <item
+        android:id="@+id/nav_expenses"
+        android:icon="@drawable/ic_wallet"
+        android:title="هزینه‌ها" />
+    <item
+        android:id="@+id/nav_barbers"
+        android:icon="@drawable/ic_cut"
+        android:title="آرایشگران" />
+    <item
+        android:id="@+id/nav_reports"
+        android:icon="@drawable/ic_chart"
+        android:title="گزارش" />
+</menu>
